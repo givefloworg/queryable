@@ -1,5 +1,5 @@
 {
-    "name": "alaca/queryable",
+    "name": "dono/queryable",
     "description": "A fluent SQL query builder for WordPress",
     "type": "library",
     "license": "MIT",
