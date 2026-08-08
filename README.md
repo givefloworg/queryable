@@ -5,7 +5,7 @@ A fluent SQL query builder for WordPress. Built on `$wpdb`, with meta table supp
 ## Installation
 
 ```bash
-composer require alaca/queryable
+composer require dono/queryable
 ```
 
 
