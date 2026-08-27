@@ -319,8 +319,11 @@ abstract class Model implements ArrayAccess
 
         $prefix = $wpdb->prefix ?? '';
         $fullName = $prefix . $model->table;
-        $charset = $wpdb->charset ?? 'utf8mb4';
-        $collate = $wpdb->collate ?? 'utf8mb4_unicode_ci';
+        // ?? only catches null. wpdb reports an empty string when the install has
+        // no collation configured, which is the default under SQLite, and that
+        // emitted a trailing "COLLATE " that no engine will parse.
+        $charset = $wpdb->charset ?: 'utf8mb4';
+        $collate = $wpdb->collate ?: 'utf8mb4_unicode_ci';
 
         $meta = $model->meta();
         $tableBuilder = new Table($charset, $collate, $meta);
