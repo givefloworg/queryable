@@ -47,15 +47,19 @@ trait HasMeta
         $primaryKey = $metaConfig['primaryKey'];
         $metaKeyCol = $metaConfig['metaKey'] ?? 'meta_key';
         $metaValueCol = $metaConfig['metaValue'] ?? 'meta_value';
-        $baseTable = $this->query['table'][0]->name ?? null;
+        // The base table is addressed by its alias once it has one: a join
+        // condition naming the real table alongside "FROM wp_posts AS p" is an
+        // unknown column, not a synonym.
+        $base = $this->query['table'][0] ?? null;
+        $baseRef = ($base->alias ?? null) ?: ($base->name ?? null);
 
         if (empty($this->query['select'])) {
-            $this->query['select'][] = new RawSQL($baseTable ? "{$baseTable}.*" : '*');
+            $this->query['select'][] = new RawSQL($baseRef ? "{$baseRef}.*" : '*');
         }
 
         foreach ($this->metaKeys as $alias => $actualKey) {
             $joinAlias = "meta_{$alias}";
-            $localRef = $baseTable ? "{$baseTable}.{$primaryKey}" : $primaryKey;
+            $localRef = $baseRef ? "{$baseRef}.{$primaryKey}" : $primaryKey;
 
             $this->joinRaw(
                 "LEFT JOIN {$metaTable} AS {$joinAlias} ON {$localRef} = {$joinAlias}.{$foreignKey} AND {$joinAlias}.{$metaKeyCol} = '{$actualKey}'",

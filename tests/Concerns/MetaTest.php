@@ -28,6 +28,26 @@ class MetaTest extends QueryBuilderTestCase
         ]);
     }
 
+    /**
+     * A join condition naming the real table alongside "FROM posts AS p" is an
+     * unknown column, not a synonym: the alias has to win everywhere.
+     */
+    public function testWithMetaAddressesAnAliasedBaseTable(): void
+    {
+        $this->assertEquals(
+            "SELECT p.ID, meta_price.meta_value AS price FROM posts AS p LEFT JOIN postmeta AS meta_price ON p.ID = meta_price.post_id AND meta_price.meta_key = '_wp_product_price'",
+            DB::table('posts', 'p')->select('p.ID')->withMeta('price')->toSQL(),
+        );
+    }
+
+    public function testWithMetaExpandsAnAliasedBaseTableStar(): void
+    {
+        $this->assertEquals(
+            "SELECT p.*, meta_price.meta_value AS price FROM posts AS p LEFT JOIN postmeta AS meta_price ON p.ID = meta_price.post_id AND meta_price.meta_key = '_wp_product_price'",
+            DB::table('posts', 'p')->withMeta('price')->toSQL(),
+        );
+    }
+
     public function testWithMetaSingleKey(): void
     {
         $this->assertEquals(
