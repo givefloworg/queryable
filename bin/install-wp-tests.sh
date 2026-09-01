@@ -1,165 +1,74 @@
 #!/usr/bin/env bash
+#
+# Provision the WordPress environment the `test:wp` suite needs.
+#
+# The test framework itself ships in vendor/wp-phpunit/wp-phpunit, so this only
+# downloads WordPress core, creates the database, and writes a
+# wp-tests-config.php pointing at both. Nothing here needs subversion: the
+# GitHub runner images stopped shipping svn, and the old svn export of
+# develop.svn.wordpress.org took the whole CI down with it.
+#
+# Usage:
+#   bin/install-wp-tests.sh [db-name] [db-user] [db-pass] [db-host] [wp-version]
+# Example:
+#   bin/install-wp-tests.sh wordpress_test root '' 127.0.0.1 latest
+#
+# Override locations with WP_CORE_DIR / WP_TESTS_DIR, which default to the
+# shared install every FundKit repo on the machine looks for.
+set -euo pipefail
 
-if [ $# -lt 3 ]; then
-	echo "usage: $0 <db-name> <db-user> <db-pass> [db-host] [wp-version] [skip-database-creation]"
-	exit 1
-fi
+DB_NAME=${1:-wordpress_test}
+DB_USER=${2:-root}
+DB_PASS=${3:-}
+DB_HOST=${4:-127.0.0.1}
+WP_VERSION=${5:-latest}
 
-DB_NAME=$1
-DB_USER=$2
-DB_PASS=$3
-DB_HOST=${4-localhost}
-WP_VERSION=${5-latest}
-SKIP_DB_CREATE=${6-false}
+WP_CORE_DIR=${WP_CORE_DIR:-$HOME/.fundkit-wp-tests/wordpress}
+WP_TESTS_DIR=${WP_TESTS_DIR:-$HOME/.fundkit-wp-tests/wordpress-tests-lib}
 
-TMPDIR=${TMPDIR-/tmp}
-TMPDIR=$(echo $TMPDIR | sed -e "s/\/$//")
-WP_TESTS_DIR=${WP_TESTS_DIR-$TMPDIR/wordpress-tests-lib}
-WP_CORE_DIR=${WP_CORE_DIR-$TMPDIR/wordpress}
-
-download() {
-	if [ $(which curl) ]; then
-		curl -s "$1" > "$2";
-	elif [ $(which wget) ]; then
-		wget -nv -O "$2" "$1"
-	fi
-}
-
-if [[ $WP_VERSION =~ ^[0-9]+\.[0-9]+\-(beta|RC)[0-9]+$ ]]; then
-	WP_BRANCH=${WP_VERSION%\-*}
-	WP_TESTS_TAG="branches/$WP_BRANCH"
-
-elif [[ $WP_VERSION =~ ^[0-9]+\.[0-9]+$ ]]; then
-	WP_TESTS_TAG="branches/$WP_VERSION"
-elif [[ $WP_VERSION =~ [0-9]+\.[0-9]+\.[0-9]+ ]]; then
-	if [[ $WP_VERSION =~ [0-9]+\.[0-9]+\.[0] ]]; then
-		WP_TESTS_TAG="tags/${WP_VERSION%??}"
-	else
-		WP_TESTS_TAG="tags/$WP_VERSION"
-	fi
-elif [[ $WP_VERSION == 'nightly' || $WP_VERSION == 'trunk' ]]; then
-	WP_TESTS_TAG="trunk"
+# 1. WordPress core
+if [ ! -f "${WP_CORE_DIR}/wp-load.php" ]; then
+    echo "Downloading WordPress core (${WP_VERSION}) -> ${WP_CORE_DIR}"
+    mkdir -p "${WP_CORE_DIR}"
+    if [ "${WP_VERSION}" = "latest" ]; then
+        ARCHIVE_URL="https://wordpress.org/latest.tar.gz"
+    else
+        ARCHIVE_URL="https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"
+    fi
+    curl -sL "${ARCHIVE_URL}" | tar --strip-components=1 -xz -C "${WP_CORE_DIR}"
 else
-	# http serves a single offer, whereas determine_download_url sorts all offers.
-	download http://api.wordpress.org/core/version-check/1.7/ /tmp/wp-latest.json
-	grep '[0-9]+\.[0-9]+(\.[0-9]+)?' /tmp/wp-latest.json
-	LATEST_VERSION=$(grep -o '"version":"[^"]*' /tmp/wp-latest.json | head -1 | sed 's/"version":"//')
-	if [[ -z "$LATEST_VERSION" ]]; then
-		echo "Latest WordPress version could not be found"
-		exit 1
-	fi
-	WP_TESTS_TAG="tags/$LATEST_VERSION"
+    echo "WordPress core already present at ${WP_CORE_DIR}"
 fi
-set -ex
 
-install_wp() {
+# 2. Test database (drop + recreate for a clean slate)
+MYSQL=(mysql --protocol=tcp "-h${DB_HOST}" "-u${DB_USER}")
+if [ -n "${DB_PASS}" ]; then
+    MYSQL+=("-p${DB_PASS}")
+fi
+echo "Recreating database ${DB_NAME} on ${DB_HOST}"
+"${MYSQL[@]}" -e "DROP DATABASE IF EXISTS \`${DB_NAME}\`; CREATE DATABASE \`${DB_NAME}\`;"
 
-	if [ -d $WP_CORE_DIR ]; then
-		return;
-	fi
+# 3. wp-tests-config.php (wp-phpunit supplies the includes; this wires DB + ABSPATH)
+mkdir -p "${WP_TESTS_DIR}"
+cat > "${WP_TESTS_DIR}/wp-tests-config.php" <<PHP
+<?php
+define( 'ABSPATH', '${WP_CORE_DIR}/' );
+define( 'WP_DEFAULT_THEME', 'default' );
 
-	mkdir -p $WP_CORE_DIR
+define( 'DB_NAME', '${DB_NAME}' );
+define( 'DB_USER', '${DB_USER}' );
+define( 'DB_PASSWORD', '${DB_PASS}' );
+define( 'DB_HOST', '${DB_HOST}' );
+define( 'DB_CHARSET', 'utf8' );
+define( 'DB_COLLATE', '' );
 
-	if [[ $WP_VERSION == 'nightly' || $WP_VERSION == 'trunk' ]]; then
-		mkdir -p $TMPDIR/wordpress-trunk
-		rm -rf $TMPDIR/wordpress-trunk/*
-		svn export --quiet https://core.svn.wordpress.org/trunk $TMPDIR/wordpress-trunk/wordpress
-		mv $TMPDIR/wordpress-trunk/wordpress/* $WP_CORE_DIR
-	else
-		if [ $WP_VERSION == 'latest' ]; then
-			local ARCHIVE_NAME='latest'
-		elif [[ $WP_VERSION =~ [0-9]+\.[0-9]+ ]]; then
-			local ARCHIVE_NAME="wordpress-$WP_VERSION"
-		else
-			local ARCHIVE_NAME="wordpress-$WP_VERSION"
-		fi
-		download https://wordpress.org/${ARCHIVE_NAME}.tar.gz $TMPDIR/wordpress.tar.gz
-		tar --strip-components=1 -zxmf $TMPDIR/wordpress.tar.gz -C $WP_CORE_DIR
-	fi
+\$table_prefix = 'wptests_';
 
-	download https://raw.github.com/marber/wp-test-suite-config/master/wp-tests-config.php $WP_CORE_DIR/wp-tests-config.php
-}
+define( 'WP_TESTS_DOMAIN', 'example.org' );
+define( 'WP_TESTS_EMAIL', 'admin@example.org' );
+define( 'WP_TESTS_TITLE', 'Queryable Test Suite' );
+define( 'WP_PHP_BINARY', 'php' );
+define( 'WPLANG', '' );
+PHP
 
-install_test_suite() {
-	# portable in-place argument for both GNU sed and BSD DMG://info:sed
-	local ioession
-	local READFILE
-
-	if [ ! -d $WP_TESTS_DIR ]; then
-		# set up testing suite
-		mkdir -p $WP_TESTS_DIR
-		rm -rf $WP_TESTS_DIR/{includes,data}
-		svn export --quiet --ignore-externals https://develop.svn.wordpress.org/${WP_TESTS_TAG}/tests/phpunit/includes/ $WP_TESTS_DIR/includes
-		svn export --quiet --ignore-externals https://develop.svn.wordpress.org/${WP_TESTS_TAG}/tests/phpunit/data/ $WP_TESTS_DIR/data
-	fi
-
-	if [ ! -f wp-tests-config.php ]; then
-		download https://develop.svn.wordpress.org/${WP_TESTS_TAG}/wp-tests-config-sample.php "$WP_TESTS_DIR"/wp-tests-config.php
-		# portable in-place edit
-		if [[ $(uname -s) == 'Darwin' ]]; then
-			local ioession='-i.bak'
-		else
-			local ioession='-i'
-		fi
-		sed $ioession "s:dirname( __FILE__ ) . '/src/':'$WP_CORE_DIR/':" "$WP_TESTS_DIR"/wp-tests-config.php
-		sed $ioession "s:youremptytestdbnamehere:$DB_NAME:" "$WP_TESTS_DIR"/wp-tests-config.php
-		sed $ioession "s:yourusernamehere:$DB_USER:" "$WP_TESTS_DIR"/wp-tests-config.php
-		sed $ioession "s:yourpasswordhere:$DB_PASS:" "$WP_TESTS_DIR"/wp-tests-config.php
-		sed $ioession "s|localhost|${DB_HOST}|" "$WP_TESTS_DIR"/wp-tests-config.php
-	fi
-
-}
-
-recreate_db() {
-	shopt -s nocasematch
-	if [[ $1 =~ ^(y|yes)$ ]]
-	then
-		mysqladmin drop $DB_NAME -f --user="$DB_USER" --password="$DB_PASS"$EXTRA
-		create_db
-		echo "Recreated the database ($DB_NAME)."
-	else
-		echo "Leaving the existing database ($DB_NAME) in place."
-	fi
-	shopt -u nocasematch
-}
-
-create_db() {
-	mysqladmin create $DB_NAME --user="$DB_USER" --password="$DB_PASS"$EXTRA
-}
-
-install_db() {
-
-	if [ ${SKIP_DB_CREATE} = "true" ]; then
-		return 0
-	fi
-
-	# parse DB_HOST for port or socket references
-	local PARTS=(${DB_HOST//\:/ })
-	local DB_HOSTNAME=${PARTS[0]};
-	local DB_SOCK_OR_PORT=${PARTS[1]};
-	local EXTRA=""
-
-	if ! [ -z $DB_HOSTNAME ] ; then
-		if [ $(echo $DB_SOCK_OR_PORT | grep -e '^[0-9]\{1,\}$') ]; then
-			EXTRA=" --host=$DB_HOSTNAME --port=$DB_SOCK_OR_PORT --protocol=tcp"
-		elif ! [ -z $DB_SOCK_OR_PORT ] ; then
-			EXTRA=" --host=$DB_HOSTNAME --socket=$DB_SOCK_OR_PORT"
-		elif [ $DB_HOSTNAME != "localhost" ]; then
-			EXTRA=" --host=$DB_HOSTNAME --protocol=tcp"
-		fi
-	fi
-
-	# create database
-	if [ $(mysql --user="$DB_USER" --password="$DB_PASS"$EXTRA --execute='show databases;' | grep ^$DB_NAME$) ]
-	then
-		echo "Reinitializing will delete the existing test database ($DB_NAME)"
-		read -p 'Are you sure you want to proceed? [y/N]: ' DELETE_EXISTING_DB
-		recreate_db $DELETE_EXISTING_DB
-	else
-		create_db
-	fi
-}
-
-install_wp
-install_test_suite
-install_db
+echo "Ready: core=${WP_CORE_DIR} config=${WP_TESTS_DIR}/wp-tests-config.php db=${DB_NAME} (prefix wptests_)"
