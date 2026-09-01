@@ -4,8 +4,18 @@ A fluent SQL query builder for WordPress. Built on `$wpdb`, with meta table supp
 
 ## Installation
 
+The package is not on Packagist, so point Composer at the repository first:
+
+```json
+{
+    "repositories": [
+        { "type": "vcs", "url": "https://github.com/fundkitorg/queryable.git" }
+    ]
+}
+```
+
 ```bash
-composer require dono/queryable
+composer require fundkit/queryable
 ```
 
 
