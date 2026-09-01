@@ -15,6 +15,33 @@ class DB
         static::$schema = $options['schema'] ?? [];
     }
 
+    /**
+     * Contribute one table's schema.
+     *
+     * init() replaces the whole schema, so it belongs to whoever boots the
+     * application. Anything else - a plugin adding its own tables, or teaching
+     * the query builder about a table it did not define - registers here, and
+     * does not silently drop everyone else's.
+     */
+    public static function registerSchema(string $table, array $schema): void
+    {
+        static::$schema[$table] = $schema;
+    }
+
+    /**
+     * The schema registered for a table, or an empty array.
+     *
+     * @return array<string, mixed>
+     */
+    public static function getSchema(?string $table = null): array
+    {
+        if ($table === null) {
+            return static::$schema;
+        }
+
+        return static::$schema[$table] ?? [];
+    }
+
     public static function table(string|Closure $name, ?string $alias = null): QueryBuilder
     {
         global $wpdb;
